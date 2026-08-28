@@ -1,0 +1,17 @@
+[Unit]
+Description=Italia Volley Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=luca
+WorkingDirectory=/home/luca/volley-bot
+EnvironmentFile=/home/luca/volley-bot/.env
+ExecStart=/home/luca/volley-bot/.venv/bin/python /home/luca/volley-bot/main.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+

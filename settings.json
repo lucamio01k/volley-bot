@@ -1,0 +1,63 @@
+{
+  "bot_timezone": "Europe/Rome",
+  "tracked_team": "ITALY",
+  "weekly_digest": {
+    "enabled": true,
+    "day": "mon",
+    "hour": 9,
+    "minute": 0
+  },
+  "daily_digest": {
+    "enabled": true,
+    "hour": 8,
+    "minute": 30,
+    "send_when_empty": false
+  },
+  "match_reminder": {
+    "enabled": true,
+    "hours_before": 2,
+    "check_interval_minutes": 10
+  },
+  "new_fixture_notification": {
+    "enabled": true,
+    "lookahead_days": 7
+  },
+  "schedule_change_notification": {
+    "enabled": true
+  },
+  "result_notification": {
+    "enabled": true,
+    "check_interval_minutes": 10,
+    "start_polling_minutes_after_start": 45,
+    "max_delay_hours": 5
+  },
+  "source_refresh": {
+    "active_interval_minutes": 60,
+    "inactive_interval_minutes": 360,
+    "request_timeout_seconds": 20,
+    "max_cache_age_hours": 12
+  },
+  "operational_alerts": {
+    "enabled": true,
+    "failure_threshold": 3,
+    "send_recovery": true
+  },
+  "competitions": [
+    {
+      "key": "eurovolley-2026-men",
+      "name": "CEV EuroVolley 2026",
+      "gender": "men",
+      "competition_id": 1572,
+      "active_from": "2026-09-09",
+      "active_to": "2026-09-27"
+    },
+    {
+      "key": "eurovolley-2026-women",
+      "name": "CEV EuroVolley 2026",
+      "gender": "women",
+      "competition_id": 1573,
+      "active_from": "2026-08-21",
+      "active_to": "2026-09-07"
+    }
+  ]
+}
