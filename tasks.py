@@ -25,6 +25,7 @@ from telegram_sender import send_message, test_connection
 
 log = get_logger(__name__)
 Sender = Callable[[str], bool]
+SYNC_DUE_TOLERANCE = dt.timedelta(minutes=2)
 
 
 def utc_now() -> dt.datetime:
@@ -68,9 +69,12 @@ def _sync_due(
     if not state or not state.get("last_success_at_utc"):
         return True
     last = _parse_utc(state["last_success_at_utc"])
-    return not last or (now or utc_now()) - last >= dt.timedelta(
-        minutes=_sync_interval_minutes(competition, now)
-    )
+    interval = dt.timedelta(minutes=_sync_interval_minutes(competition, now))
+    # The scheduler interval starts before the HTTP fetch, while last_success is
+    # stored after it completes. Without a small tolerance, a successful fetch
+    # lasting a few seconds makes the following hourly run appear "too early"
+    # and the effective refresh cadence becomes two hours.
+    return not last or (now or utc_now()) - last + SYNC_DUE_TOLERANCE >= interval
 
 
 def _send_once(

@@ -13,7 +13,7 @@ import config
 import database
 from cev_client import CEVParseError, parse_competition_html, parse_match_detail_html
 from models import CompetitionConfig
-from tasks import sync_schedule
+from tasks import _sync_due, sync_schedule
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -169,6 +169,17 @@ class DatabaseTransitionTests(unittest.TestCase):
         self.assertEqual("9906", stored.provider_match_id)
         self.assertIsNotNone(stored.first_seen_at_utc)
         self.assertIsNotNone(stored.updated_at_utc)
+
+    def test_sync_duration_does_not_skip_the_next_hourly_refresh(self) -> None:
+        now = dt.datetime(2026, 9, 1, 12, 0, tzinfo=dt.timezone.utc)
+        state = {"last_success_at_utc": "2026-09-01T11:00:05+00:00"}
+
+        with patch.object(database, "get_component_state", return_value=state):
+            self.assertTrue(_sync_due(COMPETITION, now=now, db_path=self.db_path))
+
+        state["last_success_at_utc"] = "2026-09-01T11:30:00+00:00"
+        with patch.object(database, "get_component_state", return_value=state):
+            self.assertFalse(_sync_due(COMPETITION, now=now, db_path=self.db_path))
 
     def test_date_opponent_or_venue_changes_are_detected(self) -> None:
         assigned = fixture("competition.html").replace(
