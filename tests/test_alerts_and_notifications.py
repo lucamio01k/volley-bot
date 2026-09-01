@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
+os.environ["LOG_FILE_PATH"] = os.devnull
 
 import alerts
 import database
+import main
 from models import MatchRecord
 from tasks import task_send_results, task_send_weekly
 
@@ -63,6 +68,22 @@ class IncidentTests(unittest.TestCase):
         self.assertEqual([], self.messages)
         state = database.get_component_state(self.db_path, "cev:test")
         self.assertEqual(0, state["failure_count"])
+
+    def test_error_type_change_does_not_reset_component_outage(self) -> None:
+        alerts.record_failure(
+            "cev:test", "Timezone unknown", db_path=self.db_path, sender=self.sender
+        )
+        alerts.record_failure(
+            "cev:test", "ConnectionError", db_path=self.db_path, sender=self.sender
+        )
+        alerts.record_failure(
+            "cev:test", "CEV maintenance", db_path=self.db_path, sender=self.sender
+        )
+
+        self.assertEqual(1, len(self.messages))
+        state = database.get_component_state(self.db_path, "cev:test")
+        self.assertEqual(3, state["failure_count"])
+        self.assertEqual("CEV maintenance", state["last_error"])
 
     def test_alert_redacts_tokens_tracebacks_and_html(self) -> None:
         unsafe = (
@@ -164,6 +185,20 @@ class IncidentTests(unittest.TestCase):
 
         self.assertEqual(1, len(self.messages))
         self.assertIn("Risultato non disponibile entro 5 ore", self.messages[0])
+
+
+class StartupTests(unittest.TestCase):
+    @patch.object(main, "sync_schedule")
+    @patch.object(main, "task_telegram_health")
+    def test_startup_sync_keeps_change_notifications_enabled(
+        self,
+        health,
+        sync,
+    ) -> None:
+        main._run_startup_tasks()
+
+        health.assert_called_once_with()
+        sync.assert_called_once_with(force=True, notify=True)
 
 
 if __name__ == "__main__":

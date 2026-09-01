@@ -95,6 +95,14 @@ def setup_scheduler() -> BackgroundScheduler:
     return scheduler
 
 
+def _run_startup_tasks() -> None:
+    task_telegram_health()
+    # Existing notification dedupe keys make startup sync safe. Keeping
+    # notifications enabled avoids losing a fixture/change discovered exactly
+    # during a service restart.
+    sync_schedule(force=True, notify=True)
+
+
 def main() -> None:
     database.init_db(config.DB_PATH)
     if not configured():
@@ -102,8 +110,7 @@ def main() -> None:
         raise SystemExit(1)
 
     log.info("Starting Italia Volley bot")
-    task_telegram_health()
-    sync_schedule(force=True, notify=False)
+    _run_startup_tasks()
 
     scheduler = setup_scheduler()
     scheduler.start()
@@ -129,4 +136,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -60,15 +60,24 @@ def _suffix_text(root: Tag, suffix: str) -> str:
     return _clean(node.get_text(" ", strip=True) if node else "")
 
 
-def _timezone_for_venue(venue: str) -> str:
+def _timezone_hint(venue: str = "", phase: str = "") -> str | None:
     upper = venue.upper()
     for hint, timezone_name in VENUE_TIMEZONES.items():
         if hint in upper:
             return timezone_name
-    raise CEVParseError(f"Timezone unknown for venue: {venue or 'missing venue'}")
+
+    phase_country = re.search(r"\bIN\s+([A-Z]{3})\b", phase.upper())
+    if phase_country:
+        return COUNTRY_TIMEZONES.get(phase_country.group(1))
+    return None
 
 
-def _parse_local_datetime(raw: str, venue: str) -> tuple[str | None, str | None]:
+def _parse_local_datetime(
+    raw: str,
+    venue: str,
+    phase: str,
+    match_label: str,
+) -> tuple[str | None, str | None]:
     raw = _clean(raw)
     if not raw or raw == "---" or not re.search(r"\d", raw):
         return None, None
@@ -76,7 +85,12 @@ def _parse_local_datetime(raw: str, venue: str) -> tuple[str | None, str | None]
         local = dt.datetime.strptime(raw, "%d/%m/%Y %H:%M")
     except ValueError as exc:
         raise CEVParseError(f"Invalid CEV match datetime: {raw}") from exc
-    timezone_name = _timezone_for_venue(venue)
+    timezone_name = _timezone_hint(venue, phase)
+    if not timezone_name:
+        raise CEVParseError(
+            "Timezone unknown for match "
+            f"{match_label}: venue={venue or 'missing venue'}, phase={phase or 'missing phase'}"
+        )
     localized = local.replace(tzinfo=ZoneInfo(timezone_name))
     return localized.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat(), timezone_name
 
@@ -140,7 +154,12 @@ def parse_competition_html(html_text: str, competition: CompetitionConfig) -> li
             if not match_id.isdigit():
                 raise CEVParseError(f"Invalid CEV match ID for {federation_match_code}")
 
-            scheduled_at_utc, timezone_name = _parse_local_datetime(raw_date, venue)
+            scheduled_at_utc, timezone_name = _parse_local_datetime(
+                raw_date,
+                venue,
+                phase,
+                federation_match_code or slot_code,
+            )
             home_sets = int(home_score_raw) if home_score_raw.isdigit() else 0
             away_sets = int(away_score_raw) if away_score_raw.isdigit() else 0
             result_available = max(home_sets, away_sets) == 3 and min(
@@ -217,11 +236,19 @@ def parse_match_detail_html(html_text: str, match: MatchRecord) -> MatchRecord:
     country_match = re.search(r"([A-Z]{3})", country_raw.upper())
     country_code = country_match.group(1) if country_match else ""
 
-    timezone_name = COUNTRY_TIMEZONES.get(country_code)
-    if not timezone_name and venue:
-        timezone_name = _timezone_for_venue(venue)
+    timezone_name = (
+        COUNTRY_TIMEZONES.get(country_code)
+        or _timezone_hint(venue, match.phase)
+        or match.local_timezone
+    )
     if not timezone_name:
         raise CEVParseError(f"Timezone unavailable in match detail for {match.stable_key}")
+    try:
+        ZoneInfo(timezone_name)
+    except (KeyError, ValueError) as exc:
+        raise CEVParseError(
+            f"Invalid timezone {timezone_name} in match detail for {match.stable_key}"
+        ) from exc
 
     scheduled_at_utc = match.scheduled_at_utc
     if date_raw and time_raw:

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+os.environ["LOG_FILE_PATH"] = os.devnull
 
 import config
 import database
@@ -89,6 +92,41 @@ class ParserTests(unittest.TestCase):
         unknown = fixture("competition.html").replace("Arena di Modena", "Mystery Arena")
         with self.assertRaisesRegex(CEVParseError, "Timezone unknown"):
             parse_competition_html(unknown, COMPETITION)
+
+    def test_phase_country_is_used_when_dated_match_has_no_venue(self) -> None:
+        czech_quarter = fixture("competition.html").replace(
+            'title="Quarter Finals"', 'title="Quarter Final matches in CZE"'
+        ).replace(
+            ">Quarter Finals<", ">Quarter Final matches in CZE<"
+        ).replace(
+            '<span id="m06_LB_Palasport">Arena di Assago</span>',
+            '<span id="m06_LB_Palasport"></span>',
+        )
+
+        quarter = next(
+            match
+            for match in parse_competition_html(czech_quarter, COMPETITION)
+            if match.source_payload["federation_match_code"] == "QF-01"
+        )
+
+        self.assertEqual("Europe/Prague", quarter.local_timezone)
+        self.assertEqual("2026-09-03T18:30:00+00:00", quarter.scheduled_at_utc)
+
+    def test_detail_reuses_saved_timezone_when_cev_omits_location(self) -> None:
+        match = parse_competition_html(fixture("competition.html"), COMPETITION)[0]
+        match.phase = "Quarter Finals"
+        match.venue = ""
+        detail = fixture("match_final.html")
+        detail = (
+            detail.replace("Arena di Assago", "")
+            .replace("Assago", "")
+            .replace("(ITA)", "()")
+        )
+
+        detailed = parse_match_detail_html(detail, match)
+
+        self.assertEqual("Europe/Rome", detailed.local_timezone)
+        self.assertEqual("2026-09-03T18:30:00+00:00", detailed.scheduled_at_utc)
 
 
 class DatabaseTransitionTests(unittest.TestCase):

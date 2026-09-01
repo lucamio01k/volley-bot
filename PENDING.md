@@ -7,7 +7,7 @@ Questo file raccoglie le estensioni escluse dalla prima versione EuroVolley.
 - [ ] **VNL uomini e donne** — creare un provider JSON per l’endpoint ufficiale Volleyball World `/api/v1/volley-tournament/{fromDate}/{toDate}/{tournamentIDs}`. Gli ID sono stagionali e devono restare in `settings.json`.
 - [ ] **Mondiali uomini e donne** — verificare se la competizione usa lo stesso provider Volleyball World e aggiungere fixture reali prima dell’attivazione.
 - [ ] **Olimpiadi** — analizzare il calendario ufficiale Olympics/FIVB della prossima edizione; non scegliere un aggregatore non ufficiale.
-- [ ] **Amichevoli** — introdurre prima un file manuale validato e versionato; valutare poi FIPAV, che al momento non offre un feed uniforme per tutte le amichevoli.
+- [ ] **Amichevoli** — introdurre prima un file manuale validato e versionato; valutare API-Sports come discovery e usare FIPAV per la conferma. Piano e ricerca: [SOURCES_AND_PROVIDER_PLAN.md](SOURCES_AND_PROVIDER_PLAN.md).
 
 ## P2 — Operatività
 
@@ -25,4 +25,3 @@ Questo file raccoglie le estensioni escluse dalla prima versione EuroVolley.
 ## Criterio comune
 
 Ogni provider nuovo deve avere: fonte ufficiale, identificatore stabile, conversione timezone, cache che non venga cancellata da import falliti, fixture HTML/JSON e `source-check` live.
-

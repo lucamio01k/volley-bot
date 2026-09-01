@@ -316,10 +316,13 @@ def record_component_failure(
         current = conn.execute(
             "SELECT * FROM component_state WHERE component = ?", (component,)
         ).fetchone()
-        same_incident = bool(current and current["incident_fingerprint"] == fingerprint)
-        count = int(current["failure_count"] if same_incident else 0) + 1
-        started = current["incident_started_at_utc"] if same_incident else now
-        alert_sent = int(current["alert_sent"] if same_incident else 0)
+        # A component is still in the same outage until it records a success.
+        # The fingerprint may change while the source moves between parse, HTTP,
+        # and cache errors; that must not reset the consecutive-failure counter.
+        ongoing_failure = bool(current and int(current["failure_count"]) > 0)
+        count = int(current["failure_count"] if ongoing_failure else 0) + 1
+        started = current["incident_started_at_utc"] if ongoing_failure else now
+        alert_sent = int(current["alert_sent"] if ongoing_failure else 0)
         conn.execute(
             """
             INSERT INTO component_state (

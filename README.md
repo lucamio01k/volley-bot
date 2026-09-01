@@ -106,4 +106,4 @@ Gli avvisi non contengono token, traceback o HTML grezzo. Lo stato è visibile a
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Le estensioni future sono tracciate in [PENDING.md](PENDING.md).
+Le estensioni future sono tracciate in [PENDING.md](PENDING.md). La ricerca sulle API, la gerarchia delle fonti e il piano per amichevoli, VNL e Mondiali sono descritti in [SOURCES_AND_PROVIDER_PLAN.md](SOURCES_AND_PROVIDER_PLAN.md).
