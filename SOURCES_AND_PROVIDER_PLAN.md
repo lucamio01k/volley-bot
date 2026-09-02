@@ -4,6 +4,8 @@ Documento di riferimento per estendere Volley Bot oltre EuroVolley, con particol
 
 La ricerca e le prove dal vivo riportate qui sono state eseguite il 28 agosto 2026. Gli endpoint non documentati possono cambiare: prima di abilitarli in produzione devono avere fixture di test, monitoraggio e un fallback.
 
+> **Decisione implementativa del 1 settembre 2026:** non verrà mantenuto un file manuale di amichevoli. Il provider API-Sports e i filtri automatici sono implementati ma disattivati finché chiave, ID e casi storici non vengono validati. I passaggi sul file manuale restano sotto come alternativa analizzata, non come percorso scelto.
+
 ## Decisione consigliata
 
 Non esiste oggi una singola API pubblica, ufficiale e completa per EuroVolley, competizioni FIVB e amichevoli FIPAV. Conviene adottare una strategia multi-provider con una gerarchia di fiducia:
@@ -17,8 +19,8 @@ La combinazione iniziale raccomandata è:
 
 - **EuroVolley:** mantenere il provider HTML CEV esistente;
 - **VNL e Mondiali FIVB:** Volleyball World JSON come integrazione semplice, con FIVB VIS come fonte ufficiale e controllo;
-- **amichevoli:** file manuale versionato e validato, con URL FIPAV della fonte;
-- **scoperta automatica delle amichevoli:** prova controllata di API-Sports prima di acquistare o integrare stabilmente il servizio.
+- **amichevoli:** API-Sports con filtri esatti su lega, squadra Italia, genere e stagione;
+- **attivazione:** prova controllata con il piano gratuito e provider disabilitato fino al superamento dei casi storici.
 
 ## Confronto delle fonti
 
@@ -215,9 +217,9 @@ Anche la configurazione delle competizioni deve specificare almeno `provider`, `
 
 Prima di pubblicare competizioni diverse da EuroVolley va inoltre corretto `format_result()`, che oggi scrive sempre “EuroVolley”: deve usare `competition_name` e, per le amichevoli, una categoria coerente.
 
-## File manuale per le amichevoli
+## Alternativa non scelta: file manuale per le amichevoli
 
-Come primo passo affidabile si propone `fixtures/manual_matches.json`. La directory `data/` è esclusa da Git e quindi non è adatta a una fonte versionata.
+Questa soluzione era stata proposta come primo passo affidabile, ma è stata scartata a favore dell’automazione. Se in futuro servisse un fallback editoriale, il percorso corretto sarebbe `fixtures/manual_matches.json`, perché la directory `data/` è esclusa da Git.
 
 Schema minimo suggerito:
 
@@ -250,14 +252,14 @@ Il caricatore deve validare campi, timezone, genere, squadre, duplicati e URL de
 - misurare per una settimana il polling risultati reale;
 - definire un tetto giornaliero configurabile per ogni provider commerciale.
 
-### Fase 1 — Amichevoli manuali affidabili
+### Fase 1 — Amichevoli automatiche controllate
 
-- introdurre e validare `fixtures/manual_matches.json`;
-- importare le amichevoli confermate da FIPAV;
+- configurare la chiave gratuita e identificare leghe/squadre con `api-sports-probe`;
+- validare i casi storici con il provider ancora disabilitato;
 - rendere formatter e notifiche neutrali rispetto a EuroVolley;
 - aggiungere test su timezone, deduplicazione, modifica orario e cancellazione/annullamento.
 
-Questa fase porta subito valore senza dipendenze esterne né nuove richieste HTTP.
+Questa fase mantiene il consumo ordinario intorno a quattro richieste al giorno.
 
 ### Fase 2 — Astrarre i provider e ottimizzare i risultati
 
@@ -295,6 +297,6 @@ Questa fase porta subito valore senza dipendenze esterne né nuove richieste HTT
 
 ## Scelta finale
 
-Per le amichevoli, partire dal file manuale FIPAV-backed è la soluzione più sicura e a costo zero. In parallelo si può validare API-Sports con il piano gratuito, limitandolo a discovery due volte al giorno. Per le altre partite, Volleyball World rende rapida l'integrazione di VNL e Mondiali, mentre VIS offre la base ufficiale più solida per il lungo periodo.
+Per le amichevoli è stato scelto API-Sports con piano gratuito, filtri automatici e attivazione subordinata alla validazione. Per le altre partite, Volleyball World rende rapida l'integrazione di VNL e Mondiali, mentre VIS offre la base ufficiale più solida per il lungo periodo.
 
 Prima di aggiungere qualunque nuova fonte, conviene però ottimizzare il polling risultati esistente e introdurre l'astrazione dei provider: così l'estensione ridurrà, invece di moltiplicare, il numero complessivo di richieste.

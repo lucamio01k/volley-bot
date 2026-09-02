@@ -74,8 +74,33 @@ def init_db(db_path: str) -> None:
                 recovery_pending INTEGER NOT NULL DEFAULT 0,
                 last_alert_at_utc TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS provider_sync_state (
+                component TEXT PRIMARY KEY,
+                last_attempt_at_utc TEXT,
+                last_success_at_utc TEXT,
+                next_due_at_utc TEXT,
+                payload_hash TEXT,
+                requests_date TEXT,
+                requests_today INTEGER NOT NULL DEFAULT 0,
+                quota_remaining INTEGER,
+                last_record_count INTEGER NOT NULL DEFAULT 0
+            );
             """
         )
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(matches)").fetchall()
+        }
+        if "provider" not in columns:
+            conn.execute(
+                "ALTER TABLE matches ADD COLUMN provider TEXT NOT NULL DEFAULT 'cev'"
+            )
+        if "next_result_check_at_utc" not in columns:
+            conn.execute("ALTER TABLE matches ADD COLUMN next_result_check_at_utc TEXT")
+        if "result_poll_attempts" not in columns:
+            conn.execute(
+                "ALTER TABLE matches ADD COLUMN result_poll_attempts INTEGER NOT NULL DEFAULT 0"
+            )
         conn.commit()
 
 
@@ -91,6 +116,7 @@ def _schedule_hash(match: MatchRecord) -> str:
         "timezone": match.local_timezone,
         "venue": match.venue,
         "phase": match.phase,
+        "availability": match.status if match.status in {"cancelled", "postponed"} else "",
     }
     raw = json.dumps(relevant, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -120,6 +146,9 @@ def _row_to_match(row: sqlite3.Row | None) -> MatchRecord | None:
         set_scores=[tuple(item) for item in json.loads(row["set_scores_json"] or "[]")],
         source_url=row["source_url"],
         source_payload=json.loads(row["source_payload_json"] or "{}"),
+        provider=row["provider"],
+        next_result_check_at_utc=row["next_result_check_at_utc"],
+        result_poll_attempts=row["result_poll_attempts"],
         first_seen_at_utc=row["first_seen_at_utc"],
         updated_at_utc=row["updated_at_utc"],
     )
@@ -150,6 +179,15 @@ def upsert_matches(
             ).fetchone()
             previous = _row_to_match(row)
 
+            # A partial provider record must never erase a previously resolved
+            # time or venue. This is especially important for future CEV slots,
+            # whose location can temporarily disappear while the bracket changes.
+            if previous and match.scheduled_at_utc is None and previous.scheduled_at_utc:
+                match.scheduled_at_utc = previous.scheduled_at_utc
+                match.local_timezone = previous.local_timezone
+            if previous and not match.venue and previous.venue:
+                match.venue = previous.venue
+
             if previous and previous.status == "final" and match.status != "final":
                 match.status = previous.status
                 match.home_sets = previous.home_sets
@@ -168,6 +206,9 @@ def upsert_matches(
                 and previous.involves(tracked_team)
                 and match.involves(tracked_team)
                 and _schedule_hash(previous) != schedule_hash
+            )
+            became_final = bool(
+                match.status == "final" and (not previous or previous.status != "final")
             )
 
             payload = (
@@ -191,6 +232,9 @@ def upsert_matches(
                 json.dumps(match.set_scores),
                 match.source_url,
                 json.dumps(match.source_payload, ensure_ascii=False),
+                match.provider,
+                match.next_result_check_at_utc,
+                match.result_poll_attempts,
                 schedule_hash,
                 now,
                 now,
@@ -203,8 +247,9 @@ def upsert_matches(
                     home_team, away_team, scheduled_at_utc, local_timezone,
                     venue, city, country_code, status, home_sets, away_sets,
                     set_scores_json, source_url, source_payload_json,
+                    provider, next_result_check_at_utc, result_poll_attempts,
                     schedule_hash, first_seen_at_utc, updated_at_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(competition_key, match_code) DO UPDATE SET
                     provider_match_id = excluded.provider_match_id,
                     competition_id = excluded.competition_id,
@@ -224,6 +269,7 @@ def upsert_matches(
                     set_scores_json = excluded.set_scores_json,
                     source_url = excluded.source_url,
                     source_payload_json = excluded.source_payload_json,
+                    provider = excluded.provider,
                     schedule_hash = excluded.schedule_hash,
                     updated_at_utc = excluded.updated_at_utc
                 """,
@@ -236,6 +282,7 @@ def upsert_matches(
                     is_new=is_new,
                     became_tracked=became_tracked,
                     schedule_changed=schedule_changed,
+                    became_final=became_final,
                 )
             )
         conn.commit()
@@ -406,3 +453,97 @@ def notification_count(db_path: str) -> int:
     with _connect(db_path) as conn:
         row = conn.execute("SELECT COUNT(*) FROM notification_log").fetchone()
     return int(row[0]) if row else 0
+
+
+def update_result_poll_state(
+    db_path: str,
+    match: MatchRecord,
+    *,
+    next_check_at_utc: str | None,
+    attempts: int,
+) -> None:
+    with _connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE matches
+            SET next_result_check_at_utc = ?, result_poll_attempts = ?
+            WHERE competition_key = ? AND match_code = ?
+            """,
+            (next_check_at_utc, attempts, match.competition_key, match.match_code),
+        )
+        conn.commit()
+
+
+def get_provider_sync_state(db_path: str, component: str) -> dict[str, Any] | None:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM provider_sync_state WHERE component = ?", (component,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def record_provider_sync(
+    db_path: str,
+    component: str,
+    *,
+    success: bool,
+    request_count: int = 0,
+    quota_remaining: int | None = None,
+    payload_hash: str | None = None,
+    record_count: int = 0,
+    next_due_at_utc: str | None = None,
+) -> None:
+    now = _now_iso()
+    today = now[:10]
+    with _connect(db_path) as conn:
+        current = conn.execute(
+            "SELECT * FROM provider_sync_state WHERE component = ?", (component,)
+        ).fetchone()
+        requests_today = request_count
+        if current and current["requests_date"] == today:
+            requests_today += int(current["requests_today"] or 0)
+        last_success = now if success else (current["last_success_at_utc"] if current else None)
+        stored_hash = payload_hash if payload_hash is not None else (
+            current["payload_hash"] if current else None
+        )
+        stored_quota = quota_remaining if quota_remaining is not None else (
+            current["quota_remaining"] if current else None
+        )
+        conn.execute(
+            """
+            INSERT INTO provider_sync_state (
+                component, last_attempt_at_utc, last_success_at_utc,
+                next_due_at_utc, payload_hash, requests_date,
+                requests_today, quota_remaining, last_record_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(component) DO UPDATE SET
+                last_attempt_at_utc = excluded.last_attempt_at_utc,
+                last_success_at_utc = excluded.last_success_at_utc,
+                next_due_at_utc = excluded.next_due_at_utc,
+                payload_hash = excluded.payload_hash,
+                requests_date = excluded.requests_date,
+                requests_today = excluded.requests_today,
+                quota_remaining = excluded.quota_remaining,
+                last_record_count = excluded.last_record_count
+            """,
+            (
+                component,
+                now,
+                last_success,
+                next_due_at_utc,
+                stored_hash,
+                today,
+                requests_today,
+                stored_quota,
+                record_count,
+            ),
+        )
+        conn.commit()
+
+
+def list_provider_sync_states(db_path: str) -> list[dict[str, Any]]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM provider_sync_state ORDER BY component"
+        ).fetchall()
+    return [dict(row) for row in rows]

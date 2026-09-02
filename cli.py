@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import sys
 from zoneinfo import ZoneInfo
 
 import config
 import database
-from cev_client import CEVClient
+from api_sports_client import APISportsClient
 from tasks import (
     sync_schedule,
     task_send_daily,
@@ -18,6 +19,18 @@ from tasks import (
     task_send_weekly,
 )
 from telegram_sender import send_message, test_connection
+
+
+KNOWN_2026_FRIENDLIES = {
+    "international-friendlies-2026-men": {
+        ("2026-07-05", "ARGENTINA"),
+        ("2026-08-26", "GERMANY"),
+    },
+    "international-friendlies-2026-women": {
+        ("2026-05-14", "FRANCE"),
+        ("2026-05-15", "FRANCE"),
+    },
+}
 
 
 def _date(value: str | None) -> dt.date | None:
@@ -47,6 +60,22 @@ def _print_matches(tracked_only: bool) -> None:
         )
 
 
+def _missing_known_friendlies(competition_key: str, rows) -> set[tuple[str, str]]:
+    expected = KNOWN_2026_FRIENDLIES.get(competition_key, set())
+    found: set[tuple[str, str]] = set()
+    for row in rows:
+        if not row.scheduled_at_utc:
+            continue
+        date = dt.datetime.fromisoformat(
+            row.scheduled_at_utc.replace("Z", "+00:00")
+        ).date().isoformat()
+        opponent = row.opponent_of(config.TRACKED_TEAM).upper()
+        for expected_date, expected_opponent in expected:
+            if date == expected_date and opponent.startswith(expected_opponent):
+                found.add((expected_date, expected_opponent))
+    return expected - found
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Italia Volley Telegram bot CLI")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -72,7 +101,13 @@ def build_parser() -> argparse.ArgumentParser:
     results.add_argument("--send", action="store_true")
     results.add_argument("--force", action="store_true")
 
-    commands.add_parser("source-check", help="Validate both live CEV sources without changing cache")
+    source_check = commands.add_parser(
+        "source-check", help="Validate live providers without changing cache"
+    )
+    source_check.add_argument(
+        "--all", action="store_true", help="Also validate disabled provider configurations"
+    )
+    commands.add_parser("api-sports-probe", help="Discover API-Sports friendly league/team IDs")
     commands.add_parser("alerts-status", help="Show operational incident state")
     test = commands.add_parser("test", help="Test Telegram connection")
     test.add_argument("--send", action="store_true", help="Send a visible test message")
@@ -102,18 +137,38 @@ def main() -> None:
         messages = task_send_results(force=args.force, send=args.send)
         print("\n\n".join(messages) if messages else "No final results available/due.")
     elif args.command == "source-check":
-        client = CEVClient(int(config.section("source_refresh").get("request_timeout_seconds", 20)))
         failed = False
         for competition in config.COMPETITIONS:
+            if not competition.enabled and not args.all:
+                print(f"SKIP {competition.key}: disabled")
+                continue
             try:
-                rows = client.fetch_competition(competition)
+                from providers import create_provider
+
+                client = create_provider(
+                    competition,
+                    int(config.section("source_refresh").get("request_timeout_seconds", 20)),
+                )
+                rows = client.fetch_schedule(competition).matches
                 italy = sum(row.involves(config.TRACKED_TEAM) for row in rows)
+                missing = _missing_known_friendlies(competition.key, rows)
+                if missing:
+                    cases = ", ".join(
+                        f"{date} {opponent}" for date, opponent in sorted(missing)
+                    )
+                    raise RuntimeError(f"known friendlies missing: {cases}")
                 print(f"OK {competition.key}: {len(rows)} matches, {italy} involving Italy")
             except Exception as exc:
                 failed = True
                 print(f"FAIL {competition.key}: {exc.__class__.__name__}: {exc}")
         if failed:
             raise SystemExit(1)
+    elif args.command == "api-sports-probe":
+        client = APISportsClient(
+            config.API_SPORTS_VOLLEYBALL_KEY,
+            int(config.section("source_refresh").get("request_timeout_seconds", 20)),
+        )
+        print(json.dumps(client.discover_identifiers(), ensure_ascii=False, indent=2))
     elif args.command == "alerts-status":
         states = database.list_component_states(config.DB_PATH)
         if not states:
@@ -134,6 +189,12 @@ def main() -> None:
         print(f"Matches: {len(database.list_matches(config.DB_PATH))}")
         print(f"Notifications sent: {database.notification_count(config.DB_PATH)}")
         print(f"Components tracked: {len(database.list_component_states(config.DB_PATH))}")
+        for state in database.list_provider_sync_states(config.DB_PATH):
+            print(
+                f"Provider {state['component']}: requests_today={state['requests_today']} "
+                f"quota_remaining={state['quota_remaining']} last_success={state['last_success_at_utc']} "
+                f"next_due={state['next_due_at_utc']}"
+            )
     else:
         raise SystemExit(f"Unsupported command: {args.command}")
 

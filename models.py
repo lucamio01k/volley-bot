@@ -14,6 +14,13 @@ class CompetitionConfig:
     competition_id: int
     active_from: str
     active_to: str
+    provider: str = "cev"
+    provider_competition_id: str | int | None = None
+    tracked_team_id: int | None = None
+    season: int | None = None
+    enabled: bool = True
+    active_interval_minutes: int | None = None
+    inactive_interval_minutes: int | None = None
 
 
 @dataclass
@@ -38,6 +45,9 @@ class MatchRecord:
     set_scores: list[tuple[int, int]] = field(default_factory=list)
     source_url: str = ""
     source_payload: dict[str, Any] = field(default_factory=dict)
+    provider: str = "cev"
+    next_result_check_at_utc: str | None = None
+    result_poll_attempts: int = 0
     first_seen_at_utc: str | None = None
     updated_at_utc: str | None = None
 
@@ -68,3 +78,13 @@ class MatchChange:
     is_new: bool = False
     became_tracked: bool = False
     schedule_changed: bool = False
+    became_final: bool = False
+
+
+@dataclass
+class ProviderBatch:
+    matches: list[MatchRecord]
+    warnings: list[str] = field(default_factory=list)
+    request_count: int = 1
+    quota_remaining: int | None = None
+    payload_hash: str | None = None

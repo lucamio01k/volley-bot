@@ -1,0 +1,47 @@
+{
+  "get": "games",
+  "parameters": {
+    "league": "99",
+    "season": "2026",
+    "team": "6824"
+  },
+  "errors": [],
+  "results": 2,
+  "response": [
+    {
+      "id": 16933718,
+      "date": "2026-08-26T21:00:00+02:00",
+      "timestamp": 1787770800,
+      "timezone": "Europe/Rome",
+      "week": "Friendly International",
+      "status": {"long": "Finished", "short": "FT"},
+      "league": {"id": 99, "name": "Friendly International", "season": 2026},
+      "teams": {
+        "home": {"id": 6824, "name": "Italy"},
+        "away": {"id": 6900, "name": "Germany"}
+      },
+      "scores": {"home": 3, "away": 1},
+      "periods": {
+        "first": {"home": 25, "away": 20},
+        "second": {"home": 22, "away": 25},
+        "third": {"home": 25, "away": 18},
+        "fourth": {"home": 25, "away": 21},
+        "fifth": {"home": null, "away": null}
+      },
+      "venue": {"name": "PalaPanini", "city": "Modena"}
+    },
+    {
+      "id": 17000000,
+      "date": "2026-08-27T18:00:00+00:00",
+      "timestamp": 1787853600,
+      "timezone": "UTC",
+      "status": {"long": "Not Started", "short": "NS"},
+      "league": {"id": 777, "name": "Club Friendly", "season": 2026},
+      "teams": {
+        "home": {"id": 6824, "name": "Italy"},
+        "away": {"id": 7000, "name": "Example Club"}
+      },
+      "scores": {"home": null, "away": null}
+    }
+  ]
+}

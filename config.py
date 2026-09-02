@@ -32,6 +32,7 @@ LOG_FILE_PATH = os.getenv("LOG_FILE_PATH", "data/volleybot.log")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "").strip()
+API_SPORTS_VOLLEYBALL_KEY = os.getenv("API_SPORTS_VOLLEYBALL_KEY", "").strip()
 
 SETTINGS = _load_settings()
 BOT_TIMEZONE = str(SETTINGS.get("bot_timezone", "Europe/Rome"))
@@ -49,4 +50,3 @@ def section(name: str) -> dict[str, Any]:
 COMPETITIONS = [CompetitionConfig(**item) for item in SETTINGS.get("competitions", [])]
 if not COMPETITIONS:
     raise ValueError("At least one competition must be configured")
-

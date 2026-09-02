@@ -5,6 +5,14 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DATA_DIR="$ROOT_DIR/data"
 PID_FILE="$DATA_DIR/volley-bot.pid"
 OUTPUT_FILE="$DATA_DIR/volley-bot.out"
+foreground=false
+
+if [[ "${1:-}" == "--foreground" ]]; then
+  foreground=true
+elif [[ $# -gt 0 ]]; then
+  echo "Usage: $0 [--foreground]" >&2
+  exit 2
+fi
 
 mkdir -p "$DATA_DIR"
 
@@ -37,8 +45,14 @@ else
   exit 1
 fi
 
-echo "Starting volley bot..."
 cd "$ROOT_DIR"
+if [[ "$foreground" == true ]]; then
+  echo "Starting volley bot in foreground..."
+  printf '%s\n' "$$" > "$PID_FILE"
+  exec "$python_bin" "$ROOT_DIR/main.py"
+fi
+
+echo "Starting volley bot..."
 nohup "$python_bin" "$ROOT_DIR/main.py" >>"$OUTPUT_FILE" 2>&1 &
 new_pid=$!
 printf '%s\n' "$new_pid" > "$PID_FILE"
@@ -51,4 +65,3 @@ fi
 
 echo "Volley bot running with PID $new_pid"
 echo "Output: $OUTPUT_FILE"
-

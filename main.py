@@ -38,10 +38,10 @@ def setup_scheduler() -> BackgroundScheduler:
         sync_schedule,
         IntervalTrigger(minutes=max(1, int(source.get("active_interval_minutes", 15))), timezone="UTC"),
         id="schedule_sync",
-        name="CEV schedule sync",
+        name="Provider schedule sync",
         max_instances=1,
         coalesce=True,
-        misfire_grace_time=900,
+        misfire_grace_time=None,
     )
     scheduler.add_job(
         task_send_reminders,
@@ -50,7 +50,7 @@ def setup_scheduler() -> BackgroundScheduler:
         name="Upcoming match reminders",
         max_instances=1,
         coalesce=True,
-        misfire_grace_time=900,
+        misfire_grace_time=None,
     )
     scheduler.add_job(
         task_send_results,
@@ -59,15 +59,22 @@ def setup_scheduler() -> BackgroundScheduler:
         name="Final result polling",
         max_instances=1,
         coalesce=True,
-        misfire_grace_time=900,
+        misfire_grace_time=None,
     )
     scheduler.add_job(
         task_telegram_health,
-        IntervalTrigger(minutes=15, timezone="UTC"),
+        IntervalTrigger(
+            minutes=max(
+                1,
+                int(config.section("telegram_health").get("check_interval_minutes", 60)),
+            ),
+            timezone="UTC",
+        ),
         id="telegram_health",
         name="Telegram health",
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=None,
     )
     scheduler.add_job(
         task_send_weekly,

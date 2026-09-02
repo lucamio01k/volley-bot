@@ -88,10 +88,13 @@ class ParserTests(unittest.TestCase):
         with self.assertRaises(CEVParseError):
             parse_competition_html(fixture("malformed.html"), COMPETITION)
 
-    def test_rejects_unknown_timezone(self) -> None:
+    def test_keeps_partial_match_when_timezone_is_unknown(self) -> None:
         unknown = fixture("competition.html").replace("Arena di Modena", "Mystery Arena")
-        with self.assertRaisesRegex(CEVParseError, "Timezone unknown"):
-            parse_competition_html(unknown, COMPETITION)
+        matches = parse_competition_html(unknown, COMPETITION)
+
+        self.assertIsNone(matches[0].scheduled_at_utc)
+        self.assertIsNone(matches[0].local_timezone)
+        self.assertEqual("21/08/2026 20:30", matches[0].source_payload["raw_local_datetime"])
 
     def test_phase_country_is_used_when_dated_match_has_no_venue(self) -> None:
         czech_quarter = fixture("competition.html").replace(

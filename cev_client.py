@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import re
 from urllib.parse import parse_qs, urljoin, urlparse
 from zoneinfo import ZoneInfo
@@ -12,7 +14,7 @@ from bs4 import BeautifulSoup, Tag
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from models import CompetitionConfig, MatchRecord
+from models import CompetitionConfig, MatchRecord, ProviderBatch
 
 CEV_BASE_URL = "https://www-old.cev.eu/Competition-Area/"
 COMPETITION_URL = urljoin(CEV_BASE_URL, "CompetitionView.aspx?ID={competition_id}")
@@ -87,10 +89,7 @@ def _parse_local_datetime(
         raise CEVParseError(f"Invalid CEV match datetime: {raw}") from exc
     timezone_name = _timezone_hint(venue, phase)
     if not timezone_name:
-        raise CEVParseError(
-            "Timezone unknown for match "
-            f"{match_label}: venue={venue or 'missing venue'}, phase={phase or 'missing phase'}"
-        )
+        return None, None
     localized = local.replace(tzinfo=ZoneInfo(timezone_name))
     return localized.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat(), timezone_name
 
@@ -190,6 +189,7 @@ def parse_competition_html(html_text: str, competition: CompetitionConfig) -> li
                         "slot_number": slot_number,
                         "raw_local_datetime": raw_date,
                     },
+                    provider="cev",
                 )
             )
 
@@ -280,6 +280,8 @@ def parse_match_detail_html(html_text: str, match: MatchRecord) -> MatchRecord:
 class CEVClient:
     def __init__(self, timeout_seconds: int = 20) -> None:
         self.timeout_seconds = timeout_seconds
+        self.request_count = 0
+        self.quota_remaining: int | None = None
         self.session = requests.Session()
         retry = Retry(
             total=3,
@@ -299,6 +301,7 @@ class CEVClient:
         )
 
     def _get(self, url: str) -> str:
+        self.request_count += 1
         try:
             response = self.session.get(url, timeout=self.timeout_seconds)
             response.raise_for_status()
@@ -308,6 +311,7 @@ class CEVClient:
         return response.text
 
     def fetch_competition(self, competition: CompetitionConfig) -> list[MatchRecord]:
+        self.request_count = 0
         url = COMPETITION_URL.format(competition_id=competition.competition_id)
         return parse_competition_html(self._get(url), competition)
 
@@ -315,3 +319,36 @@ class CEVClient:
         if not match.source_url:
             raise CEVParseError(f"Source URL missing for {match.stable_key}")
         return parse_match_detail_html(self._get(match.source_url), match)
+
+    def fetch_schedule(self, competition: CompetitionConfig) -> ProviderBatch:
+        matches = self.fetch_competition(competition)
+        raw = json.dumps(
+            [match.to_dict() for match in matches], sort_keys=True, ensure_ascii=False
+        )
+        unresolved = [
+            match.match_code
+            for match in matches
+            if match.source_payload.get("raw_local_datetime") and not match.scheduled_at_utc
+        ]
+        warnings = []
+        if unresolved:
+            sample = ", ".join(unresolved[:5])
+            suffix = "…" if len(unresolved) > 5 else ""
+            warnings.append(
+                f"Timezone non risolta per {len(unresolved)} slot: {sample}{suffix}"
+            )
+        return ProviderBatch(
+            matches=matches,
+            warnings=warnings,
+            request_count=self.request_count,
+            payload_hash=hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+        )
+
+    def fetch_results(
+        self,
+        _competition: CompetitionConfig,
+        matches: list[MatchRecord],
+    ) -> ProviderBatch:
+        self.request_count = 0
+        detailed = [self.fetch_match_detail(match) for match in matches]
+        return ProviderBatch(matches=detailed, request_count=self.request_count)

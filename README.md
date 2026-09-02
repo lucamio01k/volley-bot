@@ -1,6 +1,6 @@
 # Italia Volley Telegram Bot
 
-Bot Telegram per le partite delle nazionali italiane senior maschile e femminile. La prima versione segue CEV EuroVolley 2026, compresi gli accoppiamenti dinamici della fase a eliminazione diretta.
+Bot Telegram per le partite delle nazionali italiane senior maschile e femminile. Segue CEV EuroVolley 2026 e dispone del provider API-Sports per aggiungere automaticamente le amichevoli internazionali dopo la validazione della copertura.
 
 ## Funzioni
 
@@ -11,6 +11,7 @@ Bot Telegram per le partite delle nazionali italiane senior maschile e femminile
 - usa SQLite per evitare duplicati dopo i riavvii;
 - segnala nello stesso canale gli errori persistenti e il successivo ripristino;
 - non cancella il cache quando la fonte è vuota o non riconosciuta.
+- applica polling risultati con backoff e conserva una riserva della quota API-Sports.
 
 La CEV non offre un’API pubblica documentata per EuroVolley: il provider esegue richieste HTTP alle pagine ufficiali e analizza gli identificatori strutturati dell’HTML. FIPAV e i PDF ufficiali sono fonti di controllo manuale.
 
@@ -30,6 +31,14 @@ TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHANNEL_ID=...
 ```
 
+Per preparare le amichevoli automatiche, creare una chiave gratuita API-Sports e aggiungere:
+
+```text
+API_SPORTS_VOLLEYBALL_KEY=...
+```
+
+Quindi eseguire `api-sports-probe`, riportare in `settings.json` gli ID verificati delle due leghe e delle due squadre Italia, lanciare `source-check --all` e impostare `enabled: true` solo se vengono trovati anche i quattro casi storici configurati nel controllo. Fino ad allora le due configurazioni restano disattivate e non consumano richieste.
+
 Orari, intervalli e singoli tipi di notifica sono modificabili in `settings.json` tramite il rispettivo campo `enabled`.
 
 ## Verifica iniziale
@@ -48,14 +57,15 @@ I comandi di riepilogo producono solo un’anteprima. Aggiungere `--send` per in
 ## CLI
 
 ```text
-sync [--send] [--force]  aggiorna il cache CEV
+sync [--send] [--force]  aggiorna i provider abilitati
 matches                  mostra le partite dell’Italia
 bracket                  mostra tutto il tabellone, inclusi i TBD
 week [--date ...]        anteprima/invio della settimana
 today [--date ...]       anteprima/invio del giorno
 reminders                promemoria attualmente dovuti
 results                  risultati da controllare
-source-check             valida dal vivo entrambe le fonti CEV
+source-check [--all]     valida i provider senza modificare il cache
+api-sports-probe         trova gli ID candidati per leghe e squadre
 alerts-status            mostra contatori e incidenti
 test [--send]            verifica Telegram
 db-status                mostra i contatori SQLite
@@ -71,6 +81,12 @@ Per lo sviluppo:
 
 Lo script usa `data/volley-bot.pid`, verifica che il PID appartenga a questo progetto e scrive l’output in `data/volley-bot.out`.
 
+Per mantenere il processo agganciato a un terminale di debug:
+
+```bash
+./restart.sh --foreground
+```
+
 Per Raspberry, copiare `volley-bot.service` in `/etc/systemd/system/`, correggere utente e percorso se necessario, quindi:
 
 ```bash
@@ -85,8 +101,10 @@ sudo systemctl enable --now volley-bot.service
 - riepilogo lunedì alle 09:00;
 - messaggio del giorno gara alle 08:30;
 - promemoria due ore prima;
-- controllo risultati ogni 10 minuti da 45 minuti dopo l’inizio fino a cinque ore;
-- controllo Telegram ogni 15 minuti.
+- controllo risultati da 90 minuti dopo l’inizio con backoff 15/30/60 minuti;
+- recupero dei risultati mancanti fino a sette giorni e alert dopo 48 ore;
+- API-Sports ogni 12 ore, o ogni 2 ore nelle 24 ore prima di un’amichevole;
+- controllo Telegram ogni 60 minuti.
 
 Tutti gli orari utente sono in `Europe/Rome`; le ore locali CEV vengono convertite in UTC prima del salvataggio.
 

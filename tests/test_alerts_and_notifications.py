@@ -10,9 +10,10 @@ from unittest.mock import patch
 os.environ["LOG_FILE_PATH"] = os.devnull
 
 import alerts
+import config
 import database
 import main
-from models import MatchRecord
+from models import CompetitionConfig, MatchRecord, ProviderBatch
 from tasks import task_send_results, task_send_weekly
 
 
@@ -155,9 +156,9 @@ class IncidentTests(unittest.TestCase):
         state = database.get_component_state(self.db_path, "cev:test")
         self.assertEqual(0, state["recovery_pending"])
 
-    def test_missing_result_after_five_hours_is_an_incident(self) -> None:
+    def test_missing_result_after_48_hours_is_an_incident(self) -> None:
         now = dt.datetime.now(dt.timezone.utc)
-        scheduled = now - dt.timedelta(hours=5, minutes=10)
+        scheduled = now - dt.timedelta(hours=49)
         match = MatchRecord(
             provider_match_id="9999",
             competition_key="test-women",
@@ -175,16 +176,100 @@ class IncidentTests(unittest.TestCase):
         )
         database.upsert_matches(self.db_path, [match], "ITALY")
 
-        for _ in range(3):
-            task_send_results(
-                now=now,
-                send=False,
-                db_path=self.db_path,
-                sender=self.sender,
-            )
+        competition = CompetitionConfig(
+            key="test-women",
+            name="CEV EuroVolley 2026",
+            gender="women",
+            competition_id=1573,
+            active_from="2026-01-01",
+            active_to="2026-12-31",
+        )
+
+        class PendingClient:
+            def fetch_results(self, _competition, matches):
+                return ProviderBatch(matches=matches)
+
+        with patch.object(config, "COMPETITIONS", [competition]):
+            for offset in (0, 6, 12):
+                task_send_results(
+                    now=now + dt.timedelta(hours=offset),
+                    send=False,
+                    db_path=self.db_path,
+                    client=PendingClient(),
+                    sender=self.sender,
+                )
 
         self.assertEqual(1, len(self.messages))
-        self.assertIn("Risultato non disponibile entro 5 ore", self.messages[0])
+        self.assertIn("Risultato non disponibile entro 48 ore", self.messages[0])
+
+    def test_result_polling_uses_15_30_60_minute_backoff(self) -> None:
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        match = MatchRecord(
+            provider_match_id="9998",
+            competition_key="test-women",
+            competition_id=1573,
+            competition_name="CEV EuroVolley 2026",
+            gender="women",
+            match_code="1002:002",
+            phase="Quarter Finals",
+            home_team="ITALY",
+            away_team="GERMANY",
+            scheduled_at_utc=(now - dt.timedelta(minutes=100)).isoformat(),
+            local_timezone="Europe/Rome",
+            venue="Arena",
+        )
+        database.upsert_matches(self.db_path, [match], "ITALY")
+        competition = CompetitionConfig(
+            key="test-women",
+            name="CEV EuroVolley 2026",
+            gender="women",
+            competition_id=1573,
+            active_from="2026-01-01",
+            active_to="2026-12-31",
+        )
+
+        class PendingClient:
+            calls = 0
+
+            def fetch_results(self, _competition, matches):
+                self.calls += 1
+                return ProviderBatch(matches=matches)
+
+        client = PendingClient()
+        with patch.object(config, "COMPETITIONS", [competition]):
+            task_send_results(now=now, send=False, db_path=self.db_path, client=client)
+            task_send_results(
+                now=now + dt.timedelta(minutes=10),
+                send=False,
+                db_path=self.db_path,
+                client=client,
+            )
+            task_send_results(
+                now=now + dt.timedelta(minutes=15),
+                send=False,
+                db_path=self.db_path,
+                client=client,
+            )
+            task_send_results(
+                now=now + dt.timedelta(minutes=45),
+                send=False,
+                db_path=self.db_path,
+                client=client,
+            )
+            task_send_results(
+                now=now + dt.timedelta(minutes=105),
+                send=False,
+                db_path=self.db_path,
+                client=client,
+            )
+
+        self.assertEqual(4, client.calls)
+        stored = database.get_match(self.db_path, "test-women", "1002:002")
+        self.assertEqual(4, stored.result_poll_attempts)
+        self.assertEqual(
+            (now + dt.timedelta(minutes=165)).isoformat(),
+            stored.next_result_check_at_utc,
+        )
 
 
 class StartupTests(unittest.TestCase):
@@ -199,6 +284,18 @@ class StartupTests(unittest.TestCase):
 
         health.assert_called_once_with()
         sync.assert_called_once_with(force=True, notify=True)
+
+    def test_interval_jobs_coalesce_after_sleep_and_health_is_hourly(self) -> None:
+        scheduler = main.setup_scheduler()
+        jobs = {job.id: job for job in scheduler.get_jobs()}
+
+        self.assertIsNone(jobs["schedule_sync"].misfire_grace_time)
+        self.assertIsNone(jobs["match_results"].misfire_grace_time)
+        self.assertTrue(jobs["schedule_sync"].coalesce)
+        self.assertEqual(
+            dt.timedelta(hours=1),
+            jobs["telegram_health"].trigger.interval,
+        )
 
 
 if __name__ == "__main__":
