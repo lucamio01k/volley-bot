@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 from models import MatchRecord
@@ -70,6 +71,31 @@ def _date(match: MatchRecord, timezone_name: str) -> dt.datetime | None:
     return parsed.astimezone(ZoneInfo(timezone_name))
 
 
+def _calendar_link(match: MatchRecord) -> str:
+    """Build a Google Calendar link for a scheduled match lasting 90 minutes."""
+    if not match.scheduled_at_utc or match.status == "cancelled":
+        return ""
+    try:
+        start = dt.datetime.fromisoformat(match.scheduled_at_utc.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=dt.timezone.utc)
+    start = start.astimezone(dt.timezone.utc)
+    end = start + dt.timedelta(minutes=90)
+    location = ", ".join(item for item in (match.venue, match.city) if item)
+    params = {
+        "action": "TEMPLATE",
+        "text": f"Italia Volley — {match.home_team.title()} vs {match.away_team.title()}",
+        "dates": f"{start:%Y%m%dT%H%M%SZ}/{end:%Y%m%dT%H%M%SZ}",
+        "details": f"{match.competition_name} · {_phase(match.phase)}",
+    }
+    if location:
+        params["location"] = location
+    url = "https://calendar.google.com/calendar/render?" + urlencode(params)
+    return f'<a href="{html.escape(url, quote=True)}">📅 Aggiungi al calendario</a>'
+
+
 def _phase(phase: str) -> str:
     lowered = phase.lower()
     if "eight final" in lowered:
@@ -93,11 +119,15 @@ def format_match_line(match: MatchRecord, timezone_name: str) -> str:
     if local:
         when = f"{WEEKDAYS[local.weekday()]} {local.day} {MONTHS[local.month]}, {local:%H:%M}"
     venue = f" · {html.escape(match.venue)}" if match.venue else ""
-    return (
-        f"<b>{_gender_label(match.gender)}</b> · {html.escape(_phase(match.phase))}\n"
-        f"{_team(match.home_team)} – {_team(match.away_team)}\n"
-        f"🕒 {when}{venue}"
-    )
+    lines = [
+        f"<b>{_gender_label(match.gender)}</b> · {html.escape(_phase(match.phase))}",
+        f"{_team(match.home_team)} – {_team(match.away_team)}",
+        f"🕒 {when}{venue}",
+    ]
+    calendar_link = _calendar_link(match)
+    if calendar_link:
+        lines.append(calendar_link)
+    return "\n".join(lines)
 
 
 def format_weekly(matches: list[MatchRecord], start: dt.date, end: dt.date, timezone_name: str) -> str:
@@ -140,13 +170,17 @@ def format_new_fixture(match: MatchRecord, timezone_name: str) -> str:
 
 
 def format_schedule_change(match: MatchRecord, timezone_name: str) -> str:
+    if match.status == "cancelled":
+        return f"<b>❌ Partita annullata</b>\n\n{format_match_line(match, timezone_name)}"
+    if match.status == "postponed":
+        return f"<b>⏸ Partita rinviata o interrotta</b>\n\n{format_match_line(match, timezone_name)}"
     return f"<b>🔄 Aggiornamento calendario</b>\n\n{format_match_line(match, timezone_name)}"
 
 
 def format_result(match: MatchRecord) -> str:
     sets = " · ".join(f"{home}-{away}" for home, away in match.set_scores)
     lines = [
-        f"<b>✅ EuroVolley {_gender_label(match.gender)} — risultato</b>",
+        f"<b>✅ {html.escape(match.competition_name)} {_gender_label(match.gender)} — risultato</b>",
         f"{_team(match.home_team)} <b>{match.home_sets}–{match.away_sets}</b> {_team(match.away_team)}",
     ]
     if sets:
@@ -177,4 +211,3 @@ def format_recovery(component: str, duration: str) -> str:
         f"Componente: <code>{html.escape(component)}</code>\n"
         f"Durata approssimativa: {html.escape(duration)}"
     )
-
