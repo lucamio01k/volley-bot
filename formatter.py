@@ -84,9 +84,14 @@ def _calendar_link(match: MatchRecord) -> str:
     start = start.astimezone(dt.timezone.utc)
     end = start + dt.timedelta(minutes=90)
     location = ", ".join(item for item in (match.venue, match.city) if item)
+    home_flag = TEAM_FLAGS.get(match.home_team.upper(), "🏳️")
+    away_flag = TEAM_FLAGS.get(match.away_team.upper(), "🏳️")
     params = {
         "action": "TEMPLATE",
-        "text": f"Italia Volley — {match.home_team.title()} vs {match.away_team.title()}",
+        "text": (
+            f"🏐 {home_flag} {match.home_team.title()} vs "
+            f"{away_flag} {match.away_team.title()}"
+        ),
         "dates": f"{start:%Y%m%dT%H%M%SZ}/{end:%Y%m%dT%H%M%SZ}",
         "details": f"{match.competition_name} · {_phase(match.phase)}",
     }

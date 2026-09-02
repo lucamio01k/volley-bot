@@ -41,7 +41,7 @@ class CalendarLinkTests(unittest.TestCase):
         self.assertEqual("calendar.google.com", parsed.netloc)
         self.assertEqual(["TEMPLATE"], query["action"])
         self.assertEqual(["20260902T170000Z/20260902T183000Z"], query["dates"])
-        self.assertIn("Italy vs Sweden", query["text"][0])
+        self.assertEqual("🏐 🇮🇹 Italy vs 🇸🇪 Sweden", query["text"][0])
 
     def test_unscheduled_or_cancelled_match_has_no_calendar_link(self) -> None:
         self.assertNotIn(
