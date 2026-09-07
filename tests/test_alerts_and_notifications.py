@@ -121,6 +121,15 @@ class IncidentTests(unittest.TestCase):
         )
         self.assertEqual(1, database.notification_count(self.db_path))
 
+    def test_notification_claim_allows_only_one_process_to_send(self) -> None:
+        key = "weekly:2026-09-07"
+        self.assertTrue(database.claim_notification_send(self.db_path, key, "weekly"))
+        self.assertFalse(database.claim_notification_send(self.db_path, key, "weekly"))
+
+        database.mark_notification_sent(self.db_path, key, "weekly")
+        self.assertTrue(database.notification_sent(self.db_path, key))
+        self.assertEqual(1, database.notification_count(self.db_path))
+
     def test_telegram_incident_is_reported_after_connection_recovers(self) -> None:
         for _ in range(3):
             alerts.record_failure(

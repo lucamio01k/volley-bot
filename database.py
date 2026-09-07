@@ -11,6 +11,8 @@ from typing import Any, Iterable
 
 from models import MatchChange, MatchRecord
 
+NOTIFICATION_CLAIM_TIMEOUT = dt.timedelta(minutes=5)
+
 
 def _connect(db_path: str) -> sqlite3.Connection:
     directory = os.path.dirname(db_path)
@@ -60,7 +62,9 @@ def init_db(db_path: str) -> None:
                 dedupe_key TEXT PRIMARY KEY,
                 notification_type TEXT NOT NULL,
                 match_stable_key TEXT,
-                sent_at_utc TEXT NOT NULL
+                sent_at_utc TEXT NOT NULL,
+                delivery_state TEXT NOT NULL DEFAULT 'sent',
+                claimed_at_utc TEXT
             );
 
             CREATE TABLE IF NOT EXISTS component_state (
@@ -101,6 +105,17 @@ def init_db(db_path: str) -> None:
             conn.execute(
                 "ALTER TABLE matches ADD COLUMN result_poll_attempts INTEGER NOT NULL DEFAULT 0"
             )
+        notification_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(notification_log)").fetchall()
+        }
+        if "delivery_state" not in notification_columns:
+            conn.execute(
+                "ALTER TABLE notification_log "
+                "ADD COLUMN delivery_state TEXT NOT NULL DEFAULT 'sent'"
+            )
+        if "claimed_at_utc" not in notification_columns:
+            conn.execute("ALTER TABLE notification_log ADD COLUMN claimed_at_utc TEXT")
         conn.commit()
 
 
@@ -313,9 +328,49 @@ def list_matches(
 def notification_sent(db_path: str, dedupe_key: str) -> bool:
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT 1 FROM notification_log WHERE dedupe_key = ?", (dedupe_key,)
+            "SELECT 1 FROM notification_log WHERE dedupe_key = ? AND delivery_state = 'sent'",
+            (dedupe_key,),
         ).fetchone()
     return row is not None
+
+
+def claim_notification_send(
+    db_path: str,
+    dedupe_key: str,
+    notification_type: str,
+    match_stable_key: str | None = None,
+) -> bool:
+    """Atomically reserve one notification delivery across bot processes."""
+    now = _now_iso()
+    stale_before = (dt.datetime.now(dt.timezone.utc) - NOTIFICATION_CLAIM_TIMEOUT).replace(
+        microsecond=0
+    ).isoformat()
+    with _connect(db_path) as conn:
+        claimed = conn.execute(
+            """
+            INSERT OR IGNORE INTO notification_log (
+                dedupe_key, notification_type, match_stable_key, sent_at_utc,
+                delivery_state, claimed_at_utc
+            ) VALUES (?, ?, ?, ?, 'pending', ?)
+            """,
+            (dedupe_key, notification_type, match_stable_key, now, now),
+        ).rowcount
+        if claimed:
+            return True
+
+        # A crash after claiming must not suppress the notification forever.
+        reclaimed = conn.execute(
+            """
+            UPDATE notification_log
+            SET notification_type = ?, match_stable_key = ?, sent_at_utc = ?,
+                delivery_state = 'pending', claimed_at_utc = ?
+            WHERE dedupe_key = ?
+              AND delivery_state = 'pending'
+              AND claimed_at_utc < ?
+            """,
+            (notification_type, match_stable_key, now, now, dedupe_key, stale_before),
+        ).rowcount
+    return bool(reclaimed)
 
 
 def mark_notification_sent(
@@ -325,15 +380,33 @@ def mark_notification_sent(
     match_stable_key: str | None = None,
 ) -> None:
     with _connect(db_path) as conn:
-        conn.execute(
+        updated = conn.execute(
             """
-            INSERT OR IGNORE INTO notification_log
-                (dedupe_key, notification_type, match_stable_key, sent_at_utc)
-            VALUES (?, ?, ?, ?)
+            UPDATE notification_log
+            SET notification_type = ?, match_stable_key = ?, sent_at_utc = ?,
+                delivery_state = 'sent', claimed_at_utc = NULL
+            WHERE dedupe_key = ?
             """,
-            (dedupe_key, notification_type, match_stable_key, _now_iso()),
+            (notification_type, match_stable_key, _now_iso(), dedupe_key),
+        ).rowcount
+        if not updated:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO notification_log
+                    (dedupe_key, notification_type, match_stable_key, sent_at_utc)
+                VALUES (?, ?, ?, ?)
+                """,
+                (dedupe_key, notification_type, match_stable_key, _now_iso()),
+            )
+
+
+def release_notification_claim(db_path: str, dedupe_key: str) -> None:
+    """Make a failed Telegram delivery immediately eligible for retry."""
+    with _connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM notification_log WHERE dedupe_key = ? AND delivery_state = 'pending'",
+            (dedupe_key,),
         )
-        conn.commit()
 
 
 def get_component_state(db_path: str, component: str) -> dict[str, Any] | None:

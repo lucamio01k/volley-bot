@@ -145,9 +145,16 @@ def _send_once(
     sender: Sender = send_message,
 ) -> bool:
     target_db = db_path or config.DB_PATH
-    if not force and database.notification_sent(target_db, dedupe_key):
+    if not force and not database.claim_notification_send(
+        target_db,
+        dedupe_key,
+        notification_type,
+        stable_key,
+    ):
         return False
     if not sender(text):
+        if not force:
+            database.release_notification_claim(target_db, dedupe_key)
         return False
     database.mark_notification_sent(target_db, dedupe_key, notification_type, stable_key)
     return True
